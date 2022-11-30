@@ -1,0 +1,132 @@
+---
+title: "analysis"
+output: html_document
+date: "2022-11-28"
+---
+
+```{r setup, include=FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Extracting information from dataset:
+```{r}
+extract_data <- function (directory, entry_name, nof_entries) {
+  combined_list <- list()
+  names_vector <- c()
+  for (i in 1:nof_entries) {
+    filename <- paste(paste(directory, i, sep = ''), '.csv', sep = '')
+    original_df <- read.csv(file = filename)
+    hours <- c()
+    for (j in 1:nrow(original_df)) {
+      hours[j] <- format(as.POSIXct(original_df$timestamp[j]), format = "%H")
+    }
+    new_df <- cbind(original_df, hours)
+    names(new_df) <- c("timestamp", "date", "activity", "hour")
+    combined_list[[i]] <- new_df
+    names_vector[i] <- paste(entry_name, i, sep = '')
+  }
+  names(combined_list) <- names_vector
+  return (combined_list)
+}
+
+controls <- extract_data (directory = 'data/control/control_',
+                          entry_name = 'control_',
+                          32)
+conditions <- extract_data (directory = 'data/condition/condition_',
+                            entry_name = 'condition_',
+                            23)
+```
+
+Checking the data:
+
+```{r}
+controls$control_1
+```
+
+```{r}
+save_data <- function (directory, entry_name, combined_list) {
+  for (i in 1:length(combined_list)) {
+    filename <- paste(paste(paste(directory, entry_name, sep = ''), i, sep = ''), '.csv', sep = '')
+    write.csv(combined_list[[i]], filename, row.names = FALSE)
+  }
+}
+# save_data ('processed_data/control/', 'control_', controls)
+# save_data ('processed_data/condition/', 'condition_', conditions)
+```
+Loading necessary packages for summarising important statistics:
+
+```{r}
+library(dplyr)
+library(tidyr)
+```
+
+Summarizing important statistics about activity values per day for each hour:
+```{r}
+summarize_datehour <- function (entry_name, combined_list) {
+  summarize_list <- list()
+  names_vector <- c()
+  for (i in 1:length(combined_list)) {
+    tbl <- combined_list[[i]] %>% group_by(date, hour) %>%
+      summarise(nof_measurements = n(),
+                nof_zero = sum(activity == 0),
+                zero_proportion = (nof_zero/nof_measurements)*100,
+                mean = mean(activity),
+                sd = sd(activity),
+                min = min(activity),
+                max = max(activity),
+                quantile_25 = quantile(activity, prob = 0.25),
+                quantile_75 = quantile(activity, prob = 0.75),
+                )
+    summarize_list[[i]] <- tbl
+    names_vector[i] <- paste(entry_name, i, sep = '')
+  }
+  names(summarize_list) <- names_vector
+  return (summarize_list)
+}
+
+controls_dh <- summarize_datehour('control_', controls)
+conditions_dh <- summarize_datehour('condition_', conditions)
+
+# save_data ('processed_data/summary_datehour/control/', 'control_', controls_dh)
+# save_data ('processed_data/summary_datehour/condition/', 'condition_', conditions_dh)
+```
+
+```{r}
+controls_dh$control_1
+```
+
+Summarizing important statistics about activity values for each hour:
+```{r}
+summarize_hour <- function (entry_name, combined_list) {
+  summarize_list <- list()
+  names_vector <- c()
+  for (i in 1:length(combined_list)) {
+    tbl <- combined_list[[i]] %>% group_by(hour) %>%
+      summarise(nof_measurements = n(),
+                nof_zero = sum(activity == 0),
+                zero_proportion = (nof_zero/nof_measurements)*100,
+                mean = mean(activity),
+                sd = sd(activity),
+                min = min(activity),
+                max = max(activity),
+                quantile_25 = quantile(activity, prob = 0.25),
+                quantile_75 = quantile(activity, prob = 0.75),
+                )
+    summarize_list[[i]] <- tbl
+    names_vector[i] <- paste(entry_name, i, sep = '')
+  }
+  names(summarize_list) <- names_vector
+  return (summarize_list)
+}
+
+controls_h <- summarize_hour('control_', controls)
+conditions_h <- summarize_hour('condition_', conditions)
+
+# save_data ('processed_data/summary_hour/control/', 'control_', controls_h)
+# save_data ('processed_data/summary_hour/condition/', 'condition_', conditions_h)
+```
+
+```{r}
+controls_h$control_3
+conditions_h$condition_15
+```

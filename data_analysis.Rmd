@@ -1,0 +1,198 @@
+---
+title: "analysis"
+output:
+  pdf_document: default
+  pdf: default
+date: "2022-11-28"
+---
+
+```{r setup, include=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Extracting processed data:
+```{r}
+extract_data <- function (directory, entry_name, nof_entries) {
+  combined_list <- list()
+  names_vector <- c()
+  for (i in 1:nof_entries) {
+    filename <- paste(paste(directory, i, sep = ''), '.csv', sep = '')
+    combined_list[[i]] <- read.csv(file = filename)
+    names_vector[i] <- paste(entry_name, i, sep = '')
+  }
+  names(combined_list) <- names_vector
+  return (combined_list)
+}
+
+controls <- extract_data (directory = 'processed_data/control/control_',
+                          entry_name = 'control_',
+                          32)
+conditions <- extract_data (directory = 'processed_data/condition/condition_',
+                            entry_name = 'condition_',
+                            23)
+controls_datehour <- extract_data(directory = 'processed_data/summary_datehour/control/control_',
+                                  entry_name = 'control_',
+                                  32)
+conditions_datehour <- extract_data (directory = 'processed_data/summary_datehour/condition/condition_',
+                                     entry_name = 'condition_',
+                                     23)
+
+controls_hour <- extract_data(directory = 'processed_data/summary_hour/control/control_',
+                              entry_name = 'control_',
+                              32)
+conditions_hour <- extract_data(directory = 'processed_data/summary_hour/condition/condition_',
+                                entry_name = 'condition_',
+                                23)
+```
+
+```{r}
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(tidyr)
+```
+
+```{r}
+mean_date_plots <- function (entry_name, combined_list, color) {
+  plot_list <- list()
+  for (i in 1:length(combined_list)) {
+    df <- combined_list[[i]]
+    df$pos <- as.POSIXct(paste(combined_list[[i]]$date,
+                               combined_list[[i]]$hour),
+                         format = '%Y-%m-%d %H')
+    plot_list[[i]] <- ggplot(data = df, aes(x = pos, y = mean)) + 
+      geom_path(color = color) +
+      labs(title = paste(paste("Hourly mean activity of", entry_name),
+                         i, sep = ''), 
+           x = NULL, y = NULL) +
+      theme(plot.title = element_text(size = 10))
+  }
+  return (plot_list)
+}
+
+plot_list <- mean_date_plots("control_", controls_datehour, 'darkgreen')
+grid.arrange(plot_list[[1]],plot_list[[2]],plot_list[[3]],plot_list[[4]], nrow = 4)
+
+plot_list <- mean_date_plots("condition_", conditions_datehour, 'red')
+grid.arrange(plot_list[[1]],plot_list[[2]],plot_list[[3]],plot_list[[4]], nrow = 4)
+```
+
+```{r}
+mean_hour_plots <- function (entry_name, combined_list, color) {
+  plot_list = list()
+  for (i in 1:length(combined_list)) {
+    plot_list[[i]] <- ggplot(data = combined_list[[i]], aes(x = hour, y = mean)) + 
+      geom_path(color = color) + 
+      labs(title = paste(paste("Hourly mean activity of", entry_name),
+                         i, sep = ''),
+           x = NULL, y = NULL) +
+      theme(plot.title = element_text(size = 10))
+             
+  }
+  return (plot_list)
+}
+
+plot_list <- mean_hour_plots("control_", controls_hour, 'darkgreen')
+grid.arrange(plot_list[[1]],plot_list[[2]],plot_list[[3]],plot_list[[4]], nrow = 4)
+
+plot_list <- mean_hour_plots("condition_", conditions_hour, 'red')
+grid.arrange(plot_list[[1]],plot_list[[2]],plot_list[[3]],plot_list[[4]], nrow = 4)
+```
+
+```{r}
+merge_hour <- function (combined_list) {
+  entries <- names(combined_list)
+  process_df <- function (entry_index) {
+    df <- combined_list[[entry_index]]
+    entry_name_vector <- rep(c(entries[entry_index]), times = nrow(df))
+    df$entry <- entry_name_vector
+    return (df)
+  }
+  merged_df <- process_df(1)
+  for (i in 2:length(combined_list)) {
+    merged_df <- rbind(merged_df, process_df(i))
+  }
+  return (merged_df)
+}
+
+control_merged_hour <- merge_hour (controls_hour)
+colnames(control_merged_hour)[colnames(control_merged_hour) == "mean"] ="hourly_mean"
+condition_merged_hour <- merge_hour (conditions_hour)
+colnames(condition_merged_hour)[colnames(condition_merged_hour) == "mean"] ="hourly_mean"
+```
+
+```{r}
+summarize_merged_hour <- function (merged_df) {
+  tbl <- merged_df %>% group_by(hour) %>%
+      summarise(mean_hourly = mean(hourly_mean),
+                mean_zero = mean(zero_proportion))
+  return (tbl)
+}
+
+control_summary <- summarize_merged_hour(control_merged_hour)
+condition_summary <- summarize_merged_hour(condition_merged_hour)
+```
+
+
+
+```{r}
+ggplot(data = control_summary, aes(x = hour, y = mean_hourly)) + 
+  geom_path(color = 'darkgreen') +
+  geom_path(data = condition_summary, aes(x = hour, y = mean_hourly), color = 'red')
+
+ggplot(data = control_summary, aes(x = hour, y = mean_zero)) + 
+  geom_path(color = 'darkgreen') +
+  geom_path(data = condition_summary, aes(x = hour, y = mean_zero), color = 'red')
+```
+
+
+
+```{r}
+controls_df <- filter(control_merged_hour, hour == 7)
+conditions_df <- filter(condition_merged_hour, hour == 7)
+
+controls_df$depressed <- rep(c(0), times = 32)
+conditions_df$depressed <- rep(c(1), times = 23)
+
+combined_df <- rbind(controls_df, conditions_df)
+combined_df$depressed <- as.factor(combined_df$depressed)
+
+# write.csv(combined_df, 'processed_data/combined.csv', row.names = FALSE)
+
+ggplot(data = combined_df, aes(y = zero_proportion, x = depressed, fill = depressed)) + 
+  geom_boxplot() + 
+  scale_fill_manual(breaks = c(0, 1),
+                    values = c("darkgreen", "red"))
+```
+```{r}
+scores_df <- read.csv(file = 'data/scores.csv')
+colnames(scores_df)[colnames(scores_df) == "number"] ="entry"
+female_df <- combined_df[combined_df$entry %in% 
+                           filter(scores_df, gender == 1)$number,]
+male_df <- combined_df[combined_df$entry %in% 
+                         filter(scores_df, gender == 2)$number,]
+combined_df$id <- 1:nrow(combined_df)
+combined_df <- merge(combined_df, scores_df[, c("entry", "gender")], by = "entry")
+combined_df <- combined_df[order(combined_df$id), ]
+combined_df <- combined_df[, c("entry", "gender", "nof_measurements", "nof_zero", "zero_proportion", "hourly_mean", "depressed")]
+```
+
+
+```{r}
+ggplot(data = combined_df, aes(y = zero_proportion, x = depressed, fill = depressed)) + 
+  geom_boxplot() + 
+  scale_fill_manual(breaks = c(0, 1),
+                    values = c("darkgreen", "red"))
+
+ggplot(data = filter(combined_df, gender == 1), 
+       aes(y = zero_proportion, x = depressed, fill = depressed)) + 
+  geom_boxplot() + 
+  scale_fill_manual(breaks = c(0, 1),
+                    values = c("darkgreen", "red"))
+
+ggplot(data = filter(combined_df, gender == 2), 
+       aes(y = zero_proportion, x = depressed, fill = depressed)) + 
+  geom_boxplot() + 
+  scale_fill_manual(breaks = c(0, 1),
+                    values = c("darkgreen", "red"))
+```

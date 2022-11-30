@@ -1,0 +1,57 @@
+---
+title: "models"
+output:
+  pdf_document: default
+  html_document: default
+date: "2022-11-29"
+---
+
+```{r setup, include=FALSE, warnings=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+df <- read.csv(file = "processed_data/combined.csv")
+head(df)
+```
+
+```{r}
+lg_model <- glm(depressed ~ zero_proportion, data = df, family = "binomial")
+summary(lg_model)
+```
+
+```{r message=FALSE}
+library(cmdstanr)
+set_cmdstan_path('/coursedata/cmdstan')
+library(ggplot2)
+library(posterior)
+library(bayesplot)
+library(rstan)
+library(tidyr)
+library(dplyr)
+library(gridExtra)
+library(loo)
+```
+
+```{r}
+file <- file.path("pooled_model.stan")
+pooled_model <- cmdstan_model(file)
+pooled_model$print()
+```
+
+
+
+```{r results="hide"} 
+data <- list(
+  N = nrow(df),
+  x = df$zero_proportion,
+  y = df$depressed
+)
+
+fit <- pooled_model$sample(data = data, seed = 1234, refresh = 1000)
+```
+
+```{r}
+fit$cmdstan_summary()
+draws <- fit$draws()
+```
