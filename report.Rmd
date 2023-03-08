@@ -1,0 +1,778 @@
+---
+title: "Report"
+output:
+  pdf_document: 
+    toc: yes
+    toc_depth: 2
+  html_document: default
+date: "2022-11-30"
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, include=FALSE}
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(posterior)
+library(bayesplot)
+library(rstan)
+library(rstanarm)
+library(tidyr)
+library(dplyr)
+library(gridExtra)
+library(loo)
+```
+\newpage
+# 1 Introduction
+This is part of Aalto University Bayesian Data Analysis 2022 course.  
+  
+Recently, we have seen the number of patients diagnosed with depression increase substantially, especially during the COVID-19 Pandemic, causing a 25% increase in prevalence of anxiety and depression worldwide. Furthermore, depression is so common nowadays that around 3.8% of the worldwide population, around 298 millions people, is affected by this condition. This is why we chose depression as our topic as it is a very important and urgent matter that needs to be researched.  
+  
+Thus, the topic of the analysis is “Predicting depression based on brain activity using Bayesian Data Analysis”. The data was collected from a study on the prevalence of depression and its associated factors. The details of the dataset can be found here: https://www.kaggle.com/datasets/arashnic/the-depression-dataset. The dataset includes several variables such as brain activities, age, gender, education level, and family status that could be potentially associated with depression.  
+  
+Our goal is to use Bayesian data analysis methods to predict if a person has depression or not as accurately as possible from data collected on patients with depression and a control group using R and RStan. We will try to apply the data to a non-hierarchical logistic regression model and a hierarchical logistic regression model. From these, we will then determine the best methods and models by using convergence diagnostics, comparisons, predictive performance as well as sensitivity analysis. We hope that our findings can contribute to the further research on depression and can even help with future diagnosis for those suffering from this condition. With that, we have great motivation to continue this project and make the best results possible.  
+  
+This report contains the following sections: introduction, data analysis, model, implementations, convergence diagnostics, posterior predictive checks, sensitivity analysis, predictive performance assessment, prior sensitivity analysis, discussion and conclusion, and self-reflection.  
+  
+# 2 Data
+## 2.1 Dataset and Data Processing
+The original dataset is "The Depression dataset" (2018) available on Kaggle: https://www.kaggle.com/datasets/arashnic/the-depression-dataset. This dataset is obtained from monitoring motor activity per minute in 55 participants, with 23 participants in the condition group (having depression), and 32 participants in the control group (no depression). The results are put into 2 folders, one for control group and one for condition group. In the folders, each participant has a separate file containing information about the measurements: timestamp, date, and activity (activity per minute). Finally, the dataset also contains a file scores storing an overview of the participants, including information such as number (indicator for the participants), gender, or age group.  
+
+"The Depression dataset" is used for various analysis and machine learning models, ranging from predicting depression to classifying depression types. In particular, an analysis by Samuel Oseh (available on Kaggle: https://www.kaggle.com/code/samuelkali/depression-dataset-analysis-and-machine-learning) inspired the choice of variable in the models by showing the zero proportion (proportion of zero motor activity measurements) of one participant from the control group (non-depressed) and one participant from the condition group (depressed). In this model, however, data will be further processed and summarized to investigate the potential trend in this property and depression to construct a complete model with Bayesian analysis.
+  
+This large dataset is processed and summarized to arrive at a final dataset containing the variables of interest. For each participant (file) in control and condition groups, the average motor activity per minute is calculated for each hour, as well as the zero-proportion. Then, data over different dates will be averaged to arrive at data of the participants for each hour throughout the day and combined with demographics information (gender) to create the final dataset.  
+  
+The final dataset consists of 1320 rows with 7 columns for the variables of interest (futher elaborated on in the data analysis). The variables are as following:
+
+```{r echo = FALSE}
+df <- read.csv(file = "processed_data/combined.csv")
+variables <- names(df)
+types <- c("Textual", "Categorical", "Categorical", "Numerical (Integer)", "Numerical (Integer)", "Numerical (Integer)", "Numerical (Real)", "Numerical (Real)")
+descriptions <- c("Indicator of the participants, e.g. control_1, condition_2", "Gender of participants (1 = female, 2 = male)","State of depression (0 = non-depressed, 1 = depressed)", "Time (in hours)", "Number of measurements taken", "Number of measurements where motor activity per minute = 0", "Percentage of zero-measurements", "Hourly mean activity per minute")
+variable_df <- data.frame(variables, types, descriptions)
+names(variable_df) <- c("Variable", "Type", "Description")
+kable(variable_df)%>%
+  kable_classic(full_width = F) %>%
+  row_spec(0, bold = T) %>%
+  kable_styling(latex_options = "HOLD_position")
+```
+
+## 2.2 Data analysis
+In the analysis by Samuel Oseh, the zero-proportions of one non-depressed and one depressed participants are compared and show significant difference. We aim to test if there are indeed such difference across non-depressed and depressed participants. Additionally, the hourly mean across non-depressed and depressed participants are also analysed to check for potential correlation. Such combined trend is calculated using the mean values of each group:  
+
+```{r echo = FALSE}
+summarize_hour <- function (data) {
+  tbl <- data %>% group_by(hour) %>%
+      summarise(mean_hourly = mean(hourly_mean),
+                mean_zero = mean(zero_proportion))
+  return (tbl)
+}
+
+control_summary <- summarize_hour(data = filter(df, depressed == 0))
+condition_summary <- summarize_hour(data = filter(df, depressed == 1))
+mean_plot <- ggplot(data = control_summary, aes(x = hour, y = mean_hourly)) + 
+  geom_path(color = 'darkgreen') +
+  geom_path(data = condition_summary, aes(x = hour, y = mean_hourly), color = 'red') + 
+  labs(title = "Averaged hourly mean") + 
+  ylab("Hourly mean of activity per minute") + 
+  theme(aspect.ratio = 1, plot.title = element_text(size=11))
+
+zero_plot <- ggplot(data = control_summary, aes(x = hour, y = mean_zero)) + 
+  geom_path(color = 'darkgreen') +
+  geom_path(data = condition_summary, aes(x = hour, y = mean_zero), color = 'red') +
+  labs(title = "Averaged zero-proportion") + 
+  ylab ("Zero proportion of activity per minute (in %)") + 
+  theme(aspect.ratio = 1, plot.title = element_text(size=11))
+ 
+
+grid.arrange(mean_plot, zero_plot, ncol = 2)
+```
+Figure 1: Trends analysis. Green = Non-depressed, Red = Depressed  
+  
+There are no significant differences in hourly mean activity per minute between the control and condition groups throughout the day. However, there is a significant gap between the two groups with regards to the zero-proportion at the time 7:00 (up to 20% difference between approximately 40% and 60%). Hence, it is highly possible that the zero-proportion at the time 7:00 is correlated to depression state.  
+  
+Further analysis of the zero-proportion at the time 7:00 shows that the majority of non-depressed people has lower zero-proportion than depressed people:
+
+```{r echo=FALSE}
+df <- filter (df, hour == 7)
+present_df <- df
+present_df$depressed <- as.factor(present_df$depressed)
+ggplot(data = present_df, aes(y = zero_proportion, x = depressed, fill = depressed)) + 
+  geom_boxplot() + 
+  scale_fill_manual(breaks = c(0, 1),
+                    values = c("darkgreen", "red"))
+```
+Therefore, the zero-proportion at the time 7:00 is chosen as the predictor variable in our model. Furthermore, as the demographics of the participants are available, another hierarchical model is developed assuming that there can be differences between these demographic groups. In this report, gender-based differences will be studied, as depression is known to exhibit different psychological patterns between males and females, and that the number of males and females are rather close in the participants.
+
+# 3 Models
+## 3.1 Pooled Logistic Regression Model
+### 3.1.1 Model description
+
+Logistic Regression would be a suitable choice for this problem, as the project is aimed to determine between depressed and non-depressed people (binary target label). In a logistic regression model, the target label $y$ is the result of Bernoulli distribution, in which the outcomes are boolean value (0/1, yes/no, true/false) with a probability of true values denoted by $p$, or $P(y = 1) = p$.  
+  
+In a logistic regression, this probability is expressed as a function of $x$ (predictor variable):
+$$p(x) = \frac {1} {1 + e^{-(\alpha + \beta x)}}$$
+with $\alpha$ representing the log of the odds of the event, and $\beta$ is the coefficient of the predictor variable (relationship).  
+
+Or that:  
+$$log\left(\frac {p} {1 - p}\right) = \alpha + \beta x$$
+The $log\left(\frac {p} {1 - p}\right)$ is denoted as the $logit^{-1}(p)$ (logit transformation of p). As such, the likelihood of this model is:
+$$y \sim bernoulli(logit^{-1}(\alpha + \beta x))$$
+$y$ is the target label of the model, being either 1 (depressed) and 0 (non-depressed), $x$ being the predictor variable, or the zero-proportion at 7:00.
+
+The pooled model assumes that both gender groups follow the same model, with the same aforementioned distribution. In other words, both gender groups share the same $\alpha$ and $\beta$ (same distribution for $\alpha$ and $\beta$).
+
+### 3.1.2 Priors
+
+A logistic regression model was fitted to the data, with the results being:
+```{r echo = FALSE}
+lm <- glm(depressed ~ zero_proportion, data = df, family = "binomial")
+kable(summary(lm)$coefficients)%>%
+  kable_classic(full_width = F) %>%
+  row_spec(0, bold = T) %>%
+  kable_styling(latex_options = "HOLD_position")
+```
+
+The intercept in the fitted model is $\alpha$, while the coefficient for zero-proportion is $\beta$. From the summary of the fitted model, both these values have p-values < 5%, meaning that they are statistically significant. Moreover, the estimated values for $\alpha$ and $\beta$ are calculated, as well as the standard deviation.  
+  
+Using these estimates, some information about the prior distribution of $\alpha$ and $\beta$. To be consistent with this analysis while also allowing room for variations, weakly informative priors are chosen, with $\alpha$ following a normal distribution with mean = -2 and standard deviation = 100, and $\beta$ following a normal distribution with mean = 0 and standard deviation = 10.
+$$\alpha \sim N(-2, 100^2)$$
+$$\beta \sim N(0, 10^2)$$
+
+### 3.1.3 Stan implementation
+```{r echo = FALSE, warning=FALSE}
+file <- file.path("pooled_model.stan")
+cat(readLines(file), sep = "\n")
+```
+
+## 3.2 Hierarchical Logistic Regression Model
+### 3.2.1 Model descriptions
+This model also uses Logistic Regression. However, this model will take into account the potential differences between female and male participants in the sample. This means that the parameter $\beta$ (relationship between 2 variables) in the logistic regression are separate for each group, following a different distribution. Suppose that there are J groups, the likelihood $y_{i}$ for each group is:
+
+$$y_{i} \sim Bernoulli(logit^{-1}(\alpha + \beta_{i} x))$$
+
+with $beta_{i}$ being the corresponding $\beta$ for each group.  
+  
+Nevertheless, in a hierarchical model, it is assumed that these different $\beta$ parameters are generated from a hyper distribution, meaning that $\beta_{i}$ are samples from another distribution. Assuming that this hyper distribution is a normal distribution with mean $\mu$ and standard deviation $\sigma$.
+$$\beta \sim N(\mu, \sigma^2)$$
+
+The distributions of $\mu$ and $\sigma$ is unknown, which will be investigated by the Bayesian method with prior distributions and the given samples.
+
+### 3.2.2 Priors
+The prior distribution for $\alpha$ (log of the odds of the events) remains unchanged. 
+$$\alpha \sim N(-2,100^2)$$
+
+We previously assumed a weakly informative prior for $\mu$ similar to the previously used prior distribution for $\beta$ in the pooled model. However, after conducting some runs and analysis, the model resulted in very low effective sample size. Hence, the prior distribution for $\mu$ is changed: the same mean but much higher variance to allow wider range. For the hyper parameter $\sigma$, a non-negative inverse chi squared prior distribution is chosen to ensure that the generated $\sigma$ is non-negative. Some models were tested and the prior distribution that gives higher effective sample size is chosen for $\sigma$:
+$$\mu \sim N(0, 100^2)$$
+$$\sigma \sim Inv-\chi^2 (10)$$
+
+### 3.2.3 Stan implementation
+```{r echo = FALSE, warning=FALSE}
+file <- file.path("hierarchical_model.stan")
+cat(readLines(file), sep = "\n")
+```
+
+## 3.3 Fitting data to the models
+
+```{r results='hide', warning=FALSE}
+pooled_data <- list(
+  N = nrow(df),
+  x = df$zero_proportion,
+  y = df$depressed,
+  P = nrow(df),
+  x_pred = df$zero_proportion
+)
+
+hierarchical_data <- list(
+  N = nrow(df),
+  J = 2,
+  x = df$zero_proportion,
+  g = df$gender,
+  y = df$depressed,
+  P = nrow(df),
+  x_pred = df$zero_proportion,
+  g_pred = df$gender
+)
+
+SEED <- 1234
+pooled_fit <- stan(file = "pooled_model.stan", data = pooled_data, 
+                   iter = 2000, chains = 4, seed = SEED, 
+                   control = list(adapt_delta = 0.99))
+hierarchical_fit <- stan(file = "hierarchical_model.stan", data = hierarchical_data,
+                         iter = 2000, chains = 4, seed = SEED, 
+                   control = list(adapt_delta = 0.99))
+```
+For each model, 4 chains are generated with length (iteration) = 2000. A seed is set for the results to be replicable. The parameter adapt_delta was increased as the hierarchical model encounters some convergences detected by the HMC diagnostic due to large step sizes in the sampler.
+
+# 4 Convergence Diagnostics
+
+The results from the fitted models are summarized as:  
+  
+**Pooled model**
+```{r echo=FALSE}
+pooled_summary <- summary(pooled_fit)$summary[c("alpha", "beta", "lp__"),]
+hierarchical_summary <- summary(hierarchical_fit)$summary[c("mu", "sigma", "alpha", "beta[1]","beta[2]", "lp__"),]
+
+kable(pooled_summary)%>%
+  kable_classic(full_width = F) %>%
+  row_spec(0, bold = T) %>%
+  kable_styling(latex_options = c("HOLD_position", "scale_down"))
+```
+  
+**Hierarchical model**
+```{r echo=FALSE}
+kable(hierarchical_summary)%>%
+  kable_classic(full_width = F) %>%
+  row_spec(0, bold = T) %>%
+  kable_styling(latex_options = c("HOLD_position", "scale_down"))
+```
+
+## 4.1 Rhat convergence diagnostics
+
+```{r echo = FALSE}
+pooled_rhat <- rhat(pooled_fit, pars = c("alpha", "beta", "lp__"))
+pooled_plt <- mcmc_rhat(pooled_rhat) + yaxis_text(hjust = 1) + 
+  labs(title = "Rhat - Pooled model") + 
+  theme(aspect.ratio = 1, plot.title = element_text(size=11), 
+        legend.title = element_text(size=7),
+        legend.text = element_text(size=7))
+
+hierarchical_rhat <- rhat(hierarchical_fit, pars = c("mu", "sigma", "alpha", "beta[1]", "beta[2]", "lp__"))
+hierarchical_plt <- mcmc_rhat(hierarchical_rhat) + yaxis_text(hjust = 1) +
+  labs(title = "Rhat - Hierarchical model") +
+  theme(aspect.ratio = 1, plot.title = element_text(size=11),
+        legend.title = element_text(size=7),
+        legend.text = element_text(size=7))
+
+grid.arrange(pooled_plt, hierarchical_plt, ncol = 2)
+```
+
+As seen from the summary tables and the plots, Rhat values for both models are very close to 1, much lower than the 1.05 threshold. Such low Rhat values indicate that the chains have converged and the estimates are relatively reliable.
+
+## 4.2 HMC Convergence Diagnostics
+
+HMC Convergence Diagnostics are checked using functions from rstan:
+```{r}
+check_hmc_diagnostics(pooled_fit)
+```
+
+```{r}
+check_hmc_diagnostics(hierarchical_fit)
+```
+
+As such, no divergences in the iterations are detected, and the maximum tree depth is not exceeded. Hence, the estimates are quite reliable.
+
+## 4.3 Effective sample size
+
+The effective sample size are seen from the summary tables (n_eff). Furthermore, the ratio of the effective sample size per the actual sample size can be visualized:  
+  
+```{r echo=FALSE}
+pooled_neff_ratio <- neff_ratio(pooled_fit, pars = c("alpha", "beta", "lp__"))
+pooled_plt <- mcmc_neff(pooled_neff_ratio) + yaxis_text(hjust = 1) + 
+  labs(title = "Neff/N - Pooled model") + 
+  theme(aspect.ratio = 1, plot.title = element_text(size=11),
+        legend.title = element_text(size=7),
+        legend.text = element_text(size=7))
+
+hierarchical_neff_ratio <- neff_ratio(hierarchical_fit,  pars = c("mu", "sigma", "alpha", "beta[1]", "beta[2]", "lp__"))
+hierarchical_plt <- mcmc_neff(hierarchical_neff_ratio) + yaxis_text(hjust = 1) + 
+  labs(title = "Neff/N - Hierarchical model") + 
+  theme(aspect.ratio = 1, plot.title = element_text(size=11),
+        legend.title = element_text(size=7),
+        legend.text = element_text(size=7))
+
+grid.arrange(pooled_plt, hierarchical_plt, ncol = 2)
+```
+
+Effective sample size represents the number of independent samples from the drawn samples. Hence, the closer the effective sample size to the drawn sample size, the more reliable the samples. The threshold for the ratio of effective sample size to the actual sample size is 0.1, meaning that values below this threshold signifies potential problems. Nevertheless, the above plots show such ratios for both models. For both models, the ratios fall into the range between 0.1-0.5. While these are not a good effective sample sizes, they are still above the minimum threshold.
+
+# 5 Posterior predictive checks
+
+The same data (x-values) for training the models is used to calculate the accuracy of the models on training set. The mean (expected value) of the posterior predictive distribution y-values are calculated to determine the state of depression for each participant based on such distribution. Finally, the results are summarized for all participants to formulate a confusion matrix for both models:
+```{r echo=FALSE}
+y_pred_process <- function (nof_entries, y_pred) {
+  avg_y_pred <- c()
+  for (i in 1:nof_entries) {
+    mean_y_pred <- mean(y_pred[,i])
+    if (mean_y_pred > 0.5) {
+      avg_y_pred[i] <- 1
+    }
+    else {
+      avg_y_pred[i] <- 0
+    }
+  }
+  return (as.integer(avg_y_pred))
+}
+
+pooled_pred <- rstan::extract(pooled_fit, pars = c("y_pred"))
+pooled_avg_ypred <- y_pred_process(nrow(df), pooled_pred$y_pred)
+pooled_confusion_matrix <- table(df$depressed, pooled_avg_ypred, deparse.level = 2, dnn = c("Reference", "Prediction"))
+pooled_confusion_matrix <- as.data.frame(pooled_confusion_matrix)
+pooled_confusion_matrix$Prediction <- factor(pooled_confusion_matrix$Prediction, levels=rev(levels(pooled_confusion_matrix$Prediction)))
+
+pooled_plt <- ggplot(pooled_confusion_matrix, aes(Prediction,Reference, fill= Freq)) +
+  geom_tile() + geom_text(aes(label=Freq)) +
+  scale_fill_gradient(low="white", high="#009194") +
+  labs(title = "Pooled model", x = "Actual",y = "Prediction") + 
+  scale_x_discrete(labels = c("Depressed", "Non")) + 
+  scale_y_discrete(labels = c("Non", "Depressed")) +
+  theme(aspect.ratio = 1, plot.title = element_text(size=11),
+        legend.title = element_text(size=7),
+        legend.text = element_text(size=7))
+
+
+hierarchical_pred <- rstan::extract(hierarchical_fit, pars = c("y_pred"))
+hierarchical_avg_ypred <- y_pred_process(nrow(df), hierarchical_pred$y_pred)
+hierarchical_confusion_matrix <- table(df$depressed, hierarchical_avg_ypred, deparse.level = 2, dnn = c("Reference", "Prediction"))
+hierarchical_confusion_matrix <- as.data.frame(hierarchical_confusion_matrix)
+hierarchical_confusion_matrix$Prediction <- factor(hierarchical_confusion_matrix$Prediction, levels=rev(levels(hierarchical_confusion_matrix$Prediction)))
+
+hierarchical_plt <- ggplot(hierarchical_confusion_matrix, aes(Prediction,Reference, fill= Freq)) +
+  geom_tile() + geom_text(aes(label=Freq)) +
+  scale_fill_gradient(low="white", high="#009194") +
+  labs(title = "Hierarchical model", x = "Actual",y = "Prediction") + 
+  scale_x_discrete(labels = c("Depressed", "Non")) + 
+  scale_y_discrete(labels = c("Non", "Depressed")) + 
+  theme(aspect.ratio = 1, plot.title = element_text(size=11),
+        legend.title = element_text(size=7),
+        legend.text = element_text(size=7))
+
+grid.arrange(pooled_plt, hierarchical_plt, ncol = 2)
+```
+
+Based on the confusion matrix, the accuracy of the pooled model on the training set is approximately $61.82\%$, while the accuracy of the hierarchical model on the training set is approximately $72.73\%$. Furthermore, the conditional probability of actual depression with positive prediction from the pooled model is rather low, only approximately $47.83\%$; but the conditional probability of actual depression with positive prediction from the hierarchical model is higher, up to $65.22\%$. As such, the hierarchical model performs better based on confusion matrix on the training set.
+
+# 6 Predictive performance assessment
+The predictive performance assessment will be conducted with a similar manner to the posterior predictive checks. Because of the small dataset, splitting into training and testing set will be extremely difficult and the result would be unreliable. Hence, the performance assessment will be done with KFold cross validation in which at each iteration (each fold), a different training and testing set will be generated. At the final step, the average accuracy score throughout the folds will be reported. The number of folds used in this report is 5, meaning that at each fold, the training set will be of size 44 and the test set is of size 11. Furthermore, the conditional probability of true positive (depression) with positive prediction is also calculated and averaged throughout the folds. The results are as following:
+
+```{r echo=FALSE, include=FALSE, results='hide'}
+y_pred_process <- function (nof_entries, y_pred) {
+  avg_y_pred <- c()
+  for (i in 1:nof_entries) {
+    mean_y_pred <- mean(y_pred[,i])
+    if (mean_y_pred > 0.5) {
+      avg_y_pred[i] <- 1
+    }
+    else {
+      avg_y_pred[i] <- 0
+    }
+  }
+  return (as.integer(avg_y_pred))
+}
+
+accuracy_cal <- function (y, y_pred) {
+  nof_entries <- length(y)
+  accurate <- 0
+  for (i in 1:nof_entries) {
+    if (y[i] == y_pred[i]) {
+      accurate <- accurate + 1
+    }
+  }
+  return (accurate/nof_entries)
+}
+
+conditional_cal <- function(y, y_pred) {
+  nof_entries <- length(y)
+  positives <- 0
+  correct_positives <- 0
+  for (i in 1:nof_entries) {
+    if (y_pred[i] == 1) {
+      positives <- positives + 1
+      if (y[i] == 1) {
+        correct_positives <- correct_positives + 1
+      }
+    }
+  }
+  return (correct_positives/positives)
+}
+
+kfold_pooled <- function (nof_fold) {
+  total_accurate <- 0
+  total_conditional <- 0
+  test_size <- as.integer(nrow(df)/nof_fold)
+  test_sets <- list()
+  train_sets <- list()
+  remaining_df <- df
+  for (i in 1:nof_fold) {
+    set.seed(SEED)
+    sample_set <- sample_n(remaining_df, test_size)
+    test_sets[[i]] <- sample_set
+    train_sets[[i]] <- filter(df, !entry %in% sample_set$entry)
+    remaining_df <- filter(remaining_df, !entry %in% sample_set$entry)
+  }
+  for (i in 1:nof_fold) {
+    test_df <- test_sets[[i]]
+    train_df <- train_sets[[i]]
+    
+    kfold_data <- list(
+      N = nrow(train_df),
+      x = train_df$zero_proportion,
+      y = train_df$depressed,
+      P = nrow(test_df),
+      x_pred = test_df$zero_proportion
+    )
+    
+    kfold_fit <- stan(file = "pooled_model.stan", data = kfold_data, 
+                   iter = 2000, chains = 4, seed = SEED, 
+                   control = list(adapt_delta = 0.99))
+    y_pred <- rstan::extract(kfold_fit, pars = c("y_pred"))
+    y_pred <- y_pred_process(nrow(test_df), y_pred$y_pred)
+    
+    total_accurate <- total_accurate + accuracy_cal(test_df$depressed, y_pred)
+    total_conditional <- total_conditional + conditional_cal(test_df$depressed, y_pred)
+  }
+  return (c(total_accurate/nof_fold,total_conditional/nof_fold))
+}
+
+kfold_hierarchical <- function (nof_fold) {
+  total_accurate <- 0
+  total_conditional <- 0
+  test_size <- as.integer(nrow(df)/nof_fold)
+  test_sets <- list()
+  train_sets <- list()
+  remaining_df <- df
+  for (i in 1:nof_fold) {
+    set.seed(SEED)
+    sample_set <- sample_n(remaining_df, test_size)
+    test_sets[[i]] <- sample_set
+    train_sets[[i]] <- filter(df, !entry %in% sample_set$entry)
+    remaining_df <- filter(remaining_df, !entry %in% sample_set$entry)
+  }
+  for (i in 1:nof_fold) {
+    test_df <- test_sets[[i]]
+    train_df <- train_sets[[i]]
+    
+    kfold_data <- list(
+      N = nrow(train_df),
+      J = 2,
+      x = train_df$zero_proportion,
+      g = train_df$gender,
+      y = train_df$depressed,
+      P = nrow(test_df),
+      x_pred = test_df$zero_proportion,
+      g_pred = test_df$gender
+    )
+    
+    kfold_fit <- stan(file = "hierarchical_model.stan", data = kfold_data, 
+                   iter = 2000, chains = 4, seed = SEED, 
+                   control = list(adapt_delta = 0.99))
+    y_pred <- rstan::extract(kfold_fit, pars = c("y_pred"))
+    y_pred <- y_pred_process(nrow(test_df), y_pred$y_pred)
+    
+    total_accurate <- total_accurate + accuracy_cal(test_df$depressed, y_pred)
+    total_conditional <- total_conditional + conditional_cal(test_df$depressed, y_pred)
+  }
+  return (c(total_accurate/nof_fold,total_conditional/nof_fold))
+}
+
+pooled_accuracy <- kfold_pooled(5)
+hierarchical_accuracy <- kfold_hierarchical(5)
+
+types <- c("Accuracy", "Conditional probability")
+performance_df <- data.frame(types, pooled_accuracy, hierarchical_accuracy)
+names(performance_df) <- c("", "Pooled model", "Hierarchical model")
+```
+
+```{r echo=FALSE}
+kable(performance_df)%>%
+  kable_classic(full_width = F) %>%
+  row_spec(0, bold = T) %>%
+  kable_styling(latex_options = "HOLD_position")
+```
+
+The performance of both models on the test sets are decent (providing from 60% to 70% accurate predictions). The conditional probability that a person is depressed with a positive (depressed = 1) prediction from the pooled model is decent, while such conditional probability by the hierarchical model falls into the good range (from 70% to 90%). Furthermore, the performance of the hierarchical model is better with both of these metrics.  
+
+# 7 Model comparison
+The models are compared using PSIS-LOO diagnostics. The results for both models are as following:  
+  
+**Pooled model**
+```{r echo=FALSE}
+pooled_loo <- loo(pooled_fit)
+hierarchical_loo <- loo(hierarchical_fit)
+
+kable(pooled_loo$estimates)%>%
+  kable_classic(full_width = F) %>%
+  row_spec(0, bold = T) %>%
+  kable_styling(latex_options = c("HOLD_position"))
+
+plot(pooled_loo)
+```
+
+**Hierarchical model**
+```{r echo=FALSE}
+kable(hierarchical_loo$estimates)%>%
+  kable_classic(full_width = F) %>%
+  row_spec(0, bold = T) %>%
+  kable_styling(latex_options = c("HOLD_position"))
+
+plot(hierarchical_loo)
+```
+
+All Pareto-k values for both models are below the threshold 0.7, meaning that both models generate reliable estimates. However, the elpd_loo value of the pooled model is higher, meaning that the pooled model will be better according to the PSIS-LOO diagnostics.
+
+# 8 Prior Sensitivity Analysis
+## 8.1 Pooled model
+For the pooled model, the original model uses:
+$$\alpha \sim N(-2,100^2)$$
+$$\beta \sim N(0, 10^2)$$
+As such, for the alternative models, one model (alter1) will investigate the effect of changing prior distribution for $\alpha$ by using $\alpha \sim N(-10, 10)$ (changing the center point as well as giving smaller variances). Another model (alter2) will investigate the effect of changing prior distribution for $\beta$ by using $\beta \sim N(0, 1)$ (much smaller variance). The posterior distributions of $\alpha$ and $\beta$ between the 3 models are visualized as:
+```{r include=FALSE, echo=FALSE}
+pooled_data <- list(
+  N = nrow(df),
+  x = df$zero_proportion,
+  y = df$depressed
+)
+
+pooled_alter1_fit <- stan(file = "pooled_alter1.stan", data = pooled_data, 
+                   iter = 2000, chains = 4, seed = SEED, 
+                   control = list(adapt_delta = 0.99))
+
+pooled_alter2_fit <- stan(file = "pooled_alter2.stan", data = pooled_data, 
+                   iter = 2000, chains = 4, seed = SEED, 
+                   control = list(adapt_delta = 0.99))
+```
+
+```{r echo=FALSE}
+pooled_alpha_plt <- ggplot(as.data.frame(pooled_fit), aes(x = alpha)) + 
+  geom_histogram(binwidth = 0.2) + 
+  labs(title = "Original") +
+  theme(plot.title = element_text(size=11))
+
+pooled_alter1_alpha_plt <- ggplot(as.data.frame(pooled_alter1_fit), aes(x = alpha)) + 
+  geom_histogram(binwidth = 0.2) + 
+  labs(title = "Alter 1") +
+  theme(plot.title = element_text(size=11))
+pooled_alter2_alpha_plt <- ggplot(as.data.frame(pooled_alter2_fit), aes(x = alpha)) + 
+  geom_histogram(binwidth = 0.2) + 
+  labs(title = "Alter 2") +
+  theme(plot.title = element_text(size=11))
+
+pooled_beta_plt <- ggplot(as.data.frame(pooled_fit), aes(x = beta)) + 
+  geom_histogram(binwidth = 0.002) + 
+  labs(title = "Original") +
+  theme(plot.title = element_text(size=11))
+
+pooled_alter1_beta_plt <- ggplot(as.data.frame(pooled_alter1_fit), aes(x = beta)) + 
+  geom_histogram(binwidth = 0.002) + 
+  labs(title = "Alter 1") +
+  theme(plot.title = element_text(size=11))
+pooled_alter2_beta_plt <- ggplot(as.data.frame(pooled_alter2_fit), aes(x = beta)) + 
+  geom_histogram(binwidth = 0.002) + 
+  labs(title = "Alter 2") +
+  theme(plot.title = element_text(size=11))
+
+grid.arrange(pooled_alpha_plt, pooled_alter1_alpha_plt, pooled_alter2_alpha_plt,
+             pooled_beta_plt,pooled_alter1_beta_plt,pooled_alter2_beta_plt, ncol = 3, nrow = 2)
+```
+
+As such, these different prior distributions do not make a significant impact on the posterior distributions. As such, the pooled model is not sensitive to the choice of prior distribution.
+
+## 8.2 Hierarchical model
+
+For the hierarchical model, the prior distributions used are:
+$$\alpha \sim N(-2,100^2)$$
+
+$$\mu \sim N(0, 100^2)$$
+$$\sigma \sim Inv-\chi^2 (10)$$
+
+As such, several other models will be implemented using respective different prior distributions. The first alternative model (Alter 1) will use a different prior distribution for $\alpha$:
+$$\alpha \sim N(-10, 10^2)$$
+The second alternative model (Alter 2) will use a different prior distribution for $\mu$:
+$$\mu \sim N(1, 10^2)$$
+The third alternative model (Alter 3) will use a different prior distribution for $\sigma$:
+$$\sigma \sim Inv-\chi^2 (1)$$
+
+As previously noted, some choices of alternative prior distributions affect the convergence of the Markov chains in the hierarchical model. As such, the model is more sensitive to prior choice in this regards.  
+  
+Comparing the posterior distribution of $\alpha$, $\beta[1]$ and $\beta[2]$:  
+```{r include=FALSE, echo=FALSE}
+hierarchical_data <- list(
+  N = nrow(df),
+  J = 2,
+  x = df$zero_proportion,
+  g = df$gender,
+  y = df$depressed
+)
+
+hierarchical_alter1_fit <- stan(file = "hierarchical_alter1.stan", data = hierarchical_data, 
+                   iter = 2000, chains = 4, seed = SEED, 
+                   control = list(adapt_delta = 0.99))
+
+hierarchical_alter2_fit <- stan(file = "hierarchical_alter2.stan", data = hierarchical_data, 
+                   iter = 2000, chains = 4, seed = SEED, 
+                   control = list(adapt_delta = 0.99))
+
+hierarchical_alter3_fit <- stan(file = "hierarchical_alter3.stan", data = hierarchical_data, 
+                   iter = 2000, chains = 4, seed = SEED, 
+                   control = list(adapt_delta = 0.99))
+```
+
+```{r echo=FALSE}
+hierarchical_alpha_plt <- ggplot(as.data.frame(hierarchical_fit), aes(x = alpha)) + 
+  geom_histogram(binwidth = 0.2) + 
+  labs(title = "Original") +
+  theme(plot.title = element_text(size=11), 
+        axis.title.x = element_text(size = 9),
+        axis.text.x = element_text(size = 6),
+        axis.title.y = element_text(size = 9))
+
+hierarchical_alter1_alpha_plt <- ggplot(as.data.frame(hierarchical_alter1_fit), aes(x = alpha)) + 
+  geom_histogram(binwidth = 0.2) + 
+  labs(title = "Alter 1") +
+  theme(plot.title = element_text(size=11), 
+        axis.title.x = element_text(size = 9),
+        axis.text.x = element_text(size = 6),
+        axis.title.y = element_text(size = 9))
+
+hierarchical_alter2_alpha_plt <- ggplot(as.data.frame(hierarchical_alter2_fit), aes(x = alpha)) + 
+  geom_histogram(binwidth = 0.2) + 
+  labs(title = "Alter 2") +
+  theme(plot.title = element_text(size=11), 
+        axis.title.x = element_text(size = 9),
+        axis.text.x = element_text(size = 6),
+        axis.title.y = element_text(size = 9))
+
+hierarchical_alter3_alpha_plt <- ggplot(as.data.frame(hierarchical_alter3_fit), aes(x = alpha)) + 
+  geom_histogram(binwidth = 0.2) + 
+  labs(title = "Alter 3") +
+  theme(plot.title = element_text(size=11), 
+        axis.title.x = element_text(size = 9),
+        axis.text.x = element_text(size = 6),
+        axis.title.y = element_text(size = 9))
+
+hierarchical_beta1_plt <- ggplot(as.data.frame(hierarchical_fit), aes(x = `beta[1]`)) + 
+  geom_histogram(binwidth = 0.002) + 
+  labs(title = "Original") +
+  theme(plot.title = element_text(size=11), 
+        axis.title.x = element_text(size = 9),
+        axis.text.x = element_text(size = 6),
+        axis.title.y = element_text(size = 9))
+
+hierarchical_alter1_beta1_plt <- ggplot(as.data.frame(hierarchical_alter1_fit), aes(x = `beta[1]`)) + 
+  geom_histogram(binwidth = 0.002) + 
+  labs(title = "Alter 1") +
+  theme(plot.title = element_text(size=11), 
+        axis.title.x = element_text(size = 9),
+        axis.text.x = element_text(size = 6),
+        axis.title.y = element_text(size = 9))
+
+hierarchical_alter2_beta1_plt <- ggplot(as.data.frame(hierarchical_alter2_fit), aes(x = `beta[1]`)) + 
+  geom_histogram(binwidth = 0.002) + 
+  labs(title = "Alter 2") +
+  theme(plot.title = element_text(size=11), 
+        axis.title.x = element_text(size = 9),
+        axis.text.x = element_text(size = 6),
+        axis.title.y = element_text(size = 9))
+
+hierarchical_alter3_beta1_plt <- ggplot(as.data.frame(hierarchical_alter3_fit), aes(x = `beta[1]`)) + 
+  geom_histogram(binwidth = 0.002) + 
+  labs(title = "Alter 3") +
+  theme(plot.title = element_text(size=11), 
+        axis.title.x = element_text(size = 9),
+        axis.text.x = element_text(size = 6),
+        axis.title.y = element_text(size = 9))
+
+hierarchical_beta2_plt <- ggplot(as.data.frame(hierarchical_fit), aes(x = `beta[2]`)) + 
+  geom_histogram(binwidth = 0.002) + 
+  labs(title = "Original") +
+  theme(plot.title = element_text(size=11), 
+        axis.title.x = element_text(size = 9),
+        axis.text.x = element_text(size = 6),
+        axis.title.y = element_text(size = 9))
+
+hierarchical_alter1_beta2_plt <- ggplot(as.data.frame(hierarchical_alter1_fit), aes(x = `beta[2]`)) + 
+  geom_histogram(binwidth = 0.002) + 
+  labs(title = "Alter 1") +
+  theme(plot.title = element_text(size=11), 
+        axis.title.x = element_text(size = 9),
+        axis.text.x = element_text(size = 6),
+        axis.title.y = element_text(size = 9))
+
+hierarchical_alter2_beta2_plt <- ggplot(as.data.frame(hierarchical_alter2_fit), aes(x = `beta[2]`)) + 
+  geom_histogram(binwidth = 0.002) + 
+  labs(title = "Alter 2") +
+  theme(plot.title = element_text(size=11), 
+        axis.title.x = element_text(size = 9),
+        axis.text.x = element_text(size = 6),
+        axis.title.y = element_text(size = 9))
+
+hierarchical_alter3_beta2_plt <- ggplot(as.data.frame(hierarchical_alter3_fit), aes(x = `beta[2]`)) + 
+  geom_histogram(binwidth = 0.002) + 
+  labs(title = "Alter 3") +
+  theme(plot.title = element_text(size=11), 
+        axis.title.x = element_text(size = 9),
+        axis.text.x = element_text(size = 6),
+        axis.title.y = element_text(size = 9))
+
+grid.arrange(hierarchical_alpha_plt, hierarchical_alter1_alpha_plt, hierarchical_alter2_alpha_plt, hierarchical_alter3_alpha_plt, 
+             hierarchical_beta1_plt, hierarchical_alter1_beta1_plt, hierarchical_alter2_beta1_plt, hierarchical_alter3_beta1_plt, 
+             hierarchical_beta2_plt, hierarchical_alter1_beta2_plt, hierarchical_alter2_beta2_plt, hierarchical_alter3_beta2_plt, nrow = 3, ncol = 4)
+```
+It is visible that different prior distributions do not lead to significant differences in the posterior distributions for $\alpha$, $\beta[1]$ and $\beta[2]$, the direct parameters of the logistic regression model.  
+  
+Comparing the posterior distributions for $\mu$ and $\sigma$:  
+
+```{r echo=FALSE}
+hierarchical_mu_plt <- ggplot(as.data.frame(hierarchical_fit), aes(x = mu)) + 
+  geom_histogram(binwidth = 0.02) + 
+  labs(title = "Original") +
+  theme(plot.title = element_text(size=11))
+
+hierarchical_mu_alter1_plt <- ggplot(as.data.frame(hierarchical_alter1_fit), aes(x = mu)) + 
+  geom_histogram(binwidth = 0.02) + 
+  labs(title = "Original") +
+  theme(plot.title = element_text(size=11))
+
+hierarchical_mu_alter2_plt <- ggplot(as.data.frame(hierarchical_alter2_fit), aes(x = mu)) + 
+  geom_histogram(binwidth = 0.02) + 
+  labs(title = "Original") +
+  theme(plot.title = element_text(size=11))
+
+hierarchical_mu_alter3_plt <- ggplot(as.data.frame(hierarchical_alter3_fit), aes(x = mu)) + 
+  geom_histogram(binwidth = 0.02) + 
+  labs(title = "Original") +
+  theme(plot.title = element_text(size=11))
+
+hierarchical_sigma_plt <- ggplot(as.data.frame(hierarchical_fit), aes(x = sigma)) + 
+  geom_histogram(binwidth = 0.02) + 
+  labs(title = "Original") +
+  theme(plot.title = element_text(size=11))
+
+hierarchical_sigma_alter1_plt <- ggplot(as.data.frame(hierarchical_alter1_fit), aes(x = sigma)) + 
+  geom_histogram(binwidth = 0.02) + 
+  labs(title = "Original") +
+  theme(plot.title = element_text(size=11))
+
+hierarchical_sigma_alter2_plt <- ggplot(as.data.frame(hierarchical_alter2_fit), aes(x = sigma)) + 
+  geom_histogram(binwidth = 0.02) + 
+  labs(title = "Original") +
+  theme(plot.title = element_text(size=11))
+
+hierarchical_sigma_alter3_plt <- ggplot(as.data.frame(hierarchical_alter3_fit), aes(x = sigma)) + 
+  geom_histogram(binwidth = 0.02) + 
+  labs(title = "Original") +
+  theme(plot.title = element_text(size=11))
+
+grid.arrange(hierarchical_mu_plt, hierarchical_mu_alter1_plt, hierarchical_mu_alter2_plt, hierarchical_mu_alter3_plt, 
+             hierarchical_sigma_plt, hierarchical_sigma_alter1_plt, hierarchical_sigma_alter2_plt, hierarchical_sigma_alter3_plt, ncol = 4, nrow = 2)
+```
+
+There are no significant variations between the original, the first and second alternative models. However, there are some differences between the last alternative model and other models. As such, the posterior distribution of the hyper parameters can be influenced by the choice of prior distribution of the parameter $\sigma$. In conclusion, the hierarchical model is more sensitive to the choice of prior distribution than the pooled model, but the influence is not detrimental.
+
+# 9 Discussion and Conclusion
+The goal of this project is to create two different logistic regression models to predict whether a person has depression or not based on their brains’ activity. The model’s performance so far has been rather decent. The pooled model is better bases on PSIS-LOO analysis, but the predictive performance of the hierarchical model is better with the current dataset. Though the model might not be up to standard for medical usage, we hope to show that by applying Bayesian analysis methods, a reasonable model can be created to help professionals in their field to predict depression in patients.  
+  
+Based on the model, zero proportion is a good predictor for depression, especially around 7:00 AM, where the difference between the zero proportion of the depressed and non-depressed is the highest, up to a 20% difference. This discovery is quite interesting, as this suggests that people who are less active in the morning have a higher chance to be diagnosed with depression than those who are. Another noteworthy point is that depression can be somewhat influenced by gender, with depression in male participants having a slightly higher coefficient for the correlation the zero_proportion at 7:00 AM based on the results of the hierarchical model.  
+  
+The model performance is decent but can be improved further. This is due to the fact that our dataset is quite small, with only around 55 data points. Although there are a lot of parameters that can be chosen from the raw data, in the end, we decided on zero_proportion after some cleaning as it shows the clearest correlation. So, an obvious way to increase the model’s accuracy is to have a larger dataset, this will also help minimize outliers’ influence on the result as the smaller the dataset, the more impressionable they are by the outliers.  
+  
+Our group did not have much knowledge in the field of psychology, thus, our prior choices were very general and weakly informative. But this can be improved with the help of experts in the field, allowing us to have more informative priors, leading to a better model overall. Another way to improve the model with the help of experts is by changing the parameters chosen. In the report, we used zero proportion as the parameter but this can be changed to the MADRS score system to both improve the accuracy of the model and give us a more in-depth look at the severity of the depression.  
+  
+In conclusion, the results we have gathered from the models are good but there are rooms for improvement. Furthermore, the models as of now are quite simple and can be a basis for further research, giving us more reasons and motivations to work on a more specialized and complete model of Bayesian analysis.  
+  
+# 10 Self-reflection
+The project so far has been a positive experience for us. This is because it allows us to internalize what we have learnt so far from the course and put them to use. Furthermore, we have also learnt various skills from planning the workload to implementing the actual Bayesian model. We have also learnt various skills that will be useful outside of the course like how to process some data, how to consolidate them, etc. And finally, we were able to improve our knowledge on Bayesian analysis methods and topics by using them, from diagnostics to convergence, comparing and seeing the difference between the model, choosing priors, etc. All in all, the course and the project itself has helped us a lot.
