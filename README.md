@@ -10,3 +10,7 @@ We developed Bayesian models to predict depression based on the proportion of ze
 ## Result
 Our models were able to predict depression with approximately 70% accuracy on test set. Despite certain limitations (small number of test subjects, variation in summarizing data for each subject), the results reflect the potential of researching further into the correlation between depression and motor activity.
 
+However, our previous speculation that such correlation differs between males and females is neither confirmed or discarded, as the performances of both the pooled and hierarchical models are close to each other. In future research, it is promising to also investigate if the correlation between different groups would differ from one another via developing similar hierarchical models with groups by gender, age, or level of education.
+
+## Details
+Further details about the model designs and results, as well as limitations and possible future improvements can be found in the project document (report.pdf/report.Rmd/report.html files in the repository). The project primarily uses the language R for data processing, analysing and developing models, with the code also attached in the report using R Markdown; and Stan for the models.
